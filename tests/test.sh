@@ -22,7 +22,8 @@ check "hooks do not depend on rig dispatchers" "! grep -qE 'voice\(|HOOKS_DIR|_w
 check "claims-regex shebang is portable" "head -1 '$PKG/hooks/modules/claims-regex.sh' | grep -q '/usr/bin/env bash'"
 
 # --- before install: validate and self-test must work from the package alone ------
-check "self-test works before install (fresh HOME)" "bash '$PKG/bin/rigor' self-test | grep -q 'PASS red: bare template rejected'"
+pre="$(bash "$PKG/bin/rigor" self-test 2>&1)"
+check "self-test works before install (fresh HOME)" "printf '%s' \"\$pre\" | grep -q 'PASS red: bare template rejected'"
 check "validate works before install" "! bash '$PKG/bin/rigor' validate '$PKG/templates/rigor.md'"
 
 # --- install into a HOME that already has settings and a foreign hook -----------
