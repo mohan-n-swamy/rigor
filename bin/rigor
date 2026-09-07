@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# rigor — install, check and remove the Rigor protocol for Claude Code.
+# Canon: canon/RIGOR-ALGORITHM.md (installed to ~/.agents/RIGOR-ALGORITHM.md).
+set -euo pipefail
+
+PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="$(cat "$PKG/VERSION" 2>/dev/null || echo dev)"
+AGENTS_DIR="$HOME/.agents"
+CLAUDE_DIR="$HOME/.claude"
+HOOKS_DIR="$CLAUDE_DIR/hooks/rigor"
+SETTINGS="$CLAUDE_DIR/settings.json"
+CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
+GATE="$HOOKS_DIR/rigor-gate.sh"
+[ -f "$GATE" ] || GATE="$PKG/hooks/rigor-gate.sh"
+
+usage() {
+  cat <<EOF
+rigor $VERSION — the Rigor protocol for Claude Code
+
+  rigor install        copy canon, template, skill and hooks into ~/.agents and ~/.claude,
+                       wire three hooks into ~/.claude/settings.json, add one marked block
+                       to ~/.claude/CLAUDE.md, run the self-test
+  rigor uninstall      remove exactly what install added; nothing else is touched
+  rigor status         show what is installed and which hooks are wired
+  rigor validate FILE  schema-check a .rigor.md (exit 0 = answers all six questions)
+  rigor self-test      prove the gate can fail and can pass
+  rigor version
+
+Overrides once installed: 'rigor: small' in an edit · 'rigor: mute session' as a message ·
+touch ~/.claude/state/rigor-gate.disabled (pre-work gate) · ~/.claude/state/claims-gate.disabled (done-gate)
+EOF
+}
+
+need_python() {
+  command -v python3 >/dev/null 2>&1 || { echo "rigor: python3 is required (both gates use it)" >&2; exit 1; }
+}
+
+# The three hook entries, identified by their command string. Add-if-absent, remove-by-string.
+HOOK_ROWS='[
+  ["PreToolUse", "Write|Edit|MultiEdit|NotebookEdit", "bash ~/.claude/hooks/rigor/rigor-gate.sh"],
+  ["UserPromptSubmit", "*", "bash ~/.claude/hooks/rigor/rigor-gate.sh --ask"],
+  ["Stop", "*", "bash ~/.claude/hooks/rigor/evidence-gate.sh"]
+]'
+
+settings_edit() {  # $1 = add|remove
+  HOOK_ROWS="$HOOK_ROWS" SETTINGS="$SETTINGS" MODE="$1" python3 - <<'PY'
+import json, os, pathlib
+p = pathlib.Path(os.environ["SETTINGS"]); mode = os.environ["MODE"]
+rows = json.loads(os.environ["HOOK_ROWS"])
+data = json.loads(p.read_text()) if p.is_file() and p.read_text().strip() else {}
+if not isinstance(data, dict):
+    raise SystemExit("rigor: settings.json is not a JSON object; refusing to touch it")
+hooks = data.setdefault("hooks", {})
+for event, matcher, cmd in rows:
+    entries = hooks.setdefault(event, [])
+    present = any(cmd == h.get("command") for e in entries for h in e.get("hooks", []))
+    if mode == "add" and not present:
+        entries.append({"matcher": matcher, "hooks": [{"type": "command", "command": cmd}]})
+    if mode == "remove":
+        for e in entries:
+            e["hooks"] = [h for h in e.get("hooks", []) if h.get("command") != cmd]
+        hooks[event] = [e for e in entries if e.get("hooks")]
+        if not hooks[event]:
+            del hooks[event]
+if mode == "remove" and not hooks:
+    data.pop("hooks", None)
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(data, indent=2) + "\n")
+PY
+}
+
+claude_md_block() {
+  cat <<'EOF'
+<!-- rigor:begin (installed by `rigor install`; `rigor uninstall` removes this block) -->
+## Rigor — before any job
+
+Canonical: `~/.agents/RIGOR-ALGORITHM.md`. Open it, do not recall it. When a request is big
+enough — 3+ files · a new user-facing surface · behaviour others depend on · not undoable with
+`git checkout` · more than ~30 minutes to redo — do not start editing. Say it looks big enough,
+ask, then run `/rigor` and write question zero and the six answers to `.rigor.md` before the
+first edit. Before the word "done", one question: what did I run? A check ran → say done. None
+ran → run it, or say "written but not yet verified". Declare a genuinely small change with the
+literal `rigor: small` in the edit.
+
+## Ponytail — the counterweight to runaway scope
+
+@~/.agents/PONYTAIL.md
+<!-- rigor:end -->
+EOF
+}
+
+cmd_install() {
+  need_python
+  mkdir -p "$AGENTS_DIR" "$CLAUDE_DIR/templates" "$CLAUDE_DIR/skills/rigor" "$HOOKS_DIR/modules" "$CLAUDE_DIR/state"
+  cp "$PKG/canon/RIGOR-ALGORITHM.md" "$AGENTS_DIR/RIGOR-ALGORITHM.md"
+  cp "$PKG/canon/PONYTAIL.md"        "$AGENTS_DIR/PONYTAIL.md"
+  cp "$PKG/templates/rigor.md"       "$CLAUDE_DIR/templates/rigor.md"
+  cp "$PKG/skills/rigor/SKILL.md"    "$CLAUDE_DIR/skills/rigor/SKILL.md"
+  cp "$PKG/hooks/rigor-gate.sh" "$PKG/hooks/evidence-gate.sh" "$HOOKS_DIR/"
+  cp "$PKG/hooks/modules/claims-regex.sh" "$HOOKS_DIR/modules/"
+  chmod +x "$HOOKS_DIR"/*.sh
+  settings_edit add
+  touch "$CLAUDE_MD"
+  if ! grep -q 'rigor:begin' "$CLAUDE_MD"; then
+    { [ -s "$CLAUDE_MD" ] && printf '\n'; claude_md_block; } >> "$CLAUDE_MD"
+  fi
+  GATE="$HOOKS_DIR/rigor-gate.sh"
+  echo "rigor $VERSION installed:"
+  echo "  canon     $AGENTS_DIR/RIGOR-ALGORITHM.md"
+  echo "  ponytail  $AGENTS_DIR/PONYTAIL.md (imported from $CLAUDE_MD)"
+  echo "  template  $CLAUDE_DIR/templates/rigor.md"
+  echo "  skill     $CLAUDE_DIR/skills/rigor/SKILL.md   (/rigor)"
+  echo "  hooks     $HOOKS_DIR/{rigor-gate.sh,evidence-gate.sh}"
+  echo "  settings  $SETTINGS  (PreToolUse, UserPromptSubmit, Stop)"
+  echo
+  echo "self-test:"
+  bash "$GATE" --self-test | sed 's/^/  /'
+  echo
+  echo "Ponytail with its own hooks (optional, fuller than the imported copy):"
+  echo "  claude plugin marketplace add DietrichGebert/ponytail && claude plugin install ponytail@ponytail"
+  echo "Restart Claude Code sessions to pick up the hooks."
+}
+
+cmd_uninstall() {
+  need_python
+  rm -f "$AGENTS_DIR/RIGOR-ALGORITHM.md" "$AGENTS_DIR/PONYTAIL.md" "$CLAUDE_DIR/templates/rigor.md"
+  rm -rf "$CLAUDE_DIR/skills/rigor" "$HOOKS_DIR"
+  [ -f "$SETTINGS" ] && settings_edit remove
+  if [ -f "$CLAUDE_MD" ] && grep -q 'rigor:begin' "$CLAUDE_MD"; then
+    CLAUDE_MD="$CLAUDE_MD" python3 - <<'PY'
+import os, pathlib, re
+p = pathlib.Path(os.environ["CLAUDE_MD"]); t = p.read_text()
+t = re.sub(r"\n?<!-- rigor:begin.*?<!-- rigor:end -->\n?", "\n", t, flags=re.S).rstrip("\n")
+p.write_text(t + "\n" if t else "")
+PY
+  fi
+  echo "rigor removed: files, three hook entries, CLAUDE.md block. State under $CLAUDE_DIR/state/rigor left in place."
+}
+
+cmd_status() {
+  for f in "$AGENTS_DIR/RIGOR-ALGORITHM.md" "$AGENTS_DIR/PONYTAIL.md" "$CLAUDE_DIR/templates/rigor.md" \
+           "$CLAUDE_DIR/skills/rigor/SKILL.md" "$HOOKS_DIR/rigor-gate.sh" "$HOOKS_DIR/evidence-gate.sh"; do
+    [ -f "$f" ] && echo "  present  $f" || echo "  missing  $f"
+  done
+  if [ -f "$SETTINGS" ]; then
+    n=$(grep -c 'hooks/rigor/' "$SETTINGS" || true)
+    echo "  settings $SETTINGS: $n rigor hook command(s) (expect 3)"
+  else
+    echo "  settings $SETTINGS: absent"
+  fi
+  [ -f "$CLAUDE_MD" ] && grep -q 'rigor:begin' "$CLAUDE_MD" && echo "  CLAUDE.md block present" || echo "  CLAUDE.md block absent"
+}
+
+case "${1:-}" in
+  install)   cmd_install ;;
+  uninstall) cmd_uninstall ;;
+  status)    cmd_status ;;
+  validate)  shift; bash "$GATE" --validate "${1:?usage: rigor validate FILE}" ;;
+  self-test) bash "$GATE" --self-test ;;
+  version|--version|-v) echo "rigor $VERSION" ;;
+  ""|-h|--help|help) usage ;;
+  *) echo "rigor: unknown command '$1'" >&2; usage >&2; exit 2 ;;
+esac
