@@ -21,6 +21,10 @@ check "done-gate points at the shipped canon, not a private doctrine" "! grep -q
 check "hooks do not depend on rig dispatchers" "! grep -qE 'voice\(|HOOKS_DIR|_wrappers' '$PKG'/hooks/*.sh"
 check "claims-regex shebang is portable" "head -1 '$PKG/hooks/modules/claims-regex.sh' | grep -q '/usr/bin/env bash'"
 
+# --- before install: validate and self-test must work from the package alone ------
+check "self-test works before install (fresh HOME)" "bash '$PKG/bin/rigor' self-test | grep -q 'PASS red: bare template rejected'"
+check "validate works before install" "! bash '$PKG/bin/rigor' validate '$PKG/templates/rigor.md'"
+
 # --- install into a HOME that already has settings and a foreign hook -----------
 mkdir -p "$T/.claude"
 printf '{"permissions":{"allow":["Bash(ls:*)"]},"hooks":{"Stop":[{"matcher":"*","hooks":[{"type":"command","command":"echo foreign"}]}]}}\n' > "$T/.claude/settings.json"

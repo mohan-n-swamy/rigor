@@ -12,6 +12,8 @@ SETTINGS="$CLAUDE_DIR/settings.json"
 CLAUDE_MD="$CLAUDE_DIR/CLAUDE.md"
 GATE="$HOOKS_DIR/rigor-gate.sh"
 [ -f "$GATE" ] || GATE="$PKG/hooks/rigor-gate.sh"
+# Before install (brew test, a fresh clone) the gate must find the package template, not ~/.claude.
+[ -f "$CLAUDE_DIR/templates/rigor.md" ] || export RIGOR_TEMPLATE="${RIGOR_TEMPLATE:-$PKG/templates/rigor.md}"
 
 usage() {
   cat <<EOF

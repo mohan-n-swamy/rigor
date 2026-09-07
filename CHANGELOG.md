@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.1 — 2026-09-07
+
+- `rigor self-test` and `rigor validate` work before `rigor install`: the gate now falls back to the package template. Found by `brew test` running in its sandbox HOME.
+
 ## v0.1.0 — 2026-09-07
 
 First public cut. Everything here ran unchanged on the author's machine before packaging.
